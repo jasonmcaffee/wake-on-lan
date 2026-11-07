@@ -1,0 +1,11 @@
+stateDiagram-v2
+  [*] --> Asleep
+  Asleep --> DarkWake: sleep proxy or magic packet
+  DarkWake --> FullWake: first request → caffeinate -u
+  FullWake --> Leased: caffeinate -i -s -t 300
+  Leased --> Leased: any request extends the lease
+  Leased --> JobRunning: POST /jobs → caffeinate -w pid
+  JobRunning --> JobRunning: more jobs or requests
+  JobRunning --> Leased: job exits, its assertion releases
+  Leased --> Idle: lease expires and no jobs running
+  Idle --> Asleep: normal macOS idle sleep

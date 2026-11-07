@@ -1,0 +1,15 @@
+flowchart TD
+  req[POST /jobs] --> auth{valid token?}
+  auth -- no --> r401[401 Unauthorized]
+  auth -- yes --> kind{body has?}
+  kind -- "job" --> known{named job<br/>in config?}
+  known -- no --> r404[404 Unknown job]
+  known -- yes --> cwd
+  kind -- "command" --> allowed{allowArbitraryCommands?}
+  allowed -- no --> r403[403 disabled]
+  allowed -- yes --> cwd
+  kind -- neither --> r400[400 bad request]
+  cwd{cwd exists?} -- no --> r400b[400 bad cwd]
+  cwd -- yes --> spawn["spawn $SHELL -lc command<br/>own process group, stdout+stderr → logs/id.log"]
+  spawn --> hold[caffeinate -i -s -m -w pid]
+  hold --> r202[202 run record]

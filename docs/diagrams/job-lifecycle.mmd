@@ -1,0 +1,8 @@
+stateDiagram-v2
+  [*] --> running: spawned
+  running --> succeeded: exit code 0
+  running --> failed: non-zero exit or spawn error
+  running --> cancelled: POST /jobs/:id/cancel
+  succeeded --> [*]
+  failed --> [*]
+  cancelled --> [*]

@@ -1,0 +1,12 @@
+flowchart TD
+  start([wol run / wake / jobs / ...]) --> resolve{host resolves<br/>over mDNS?}
+  resolve -- no, fallbackIp set --> useip[use fallbackIp]
+  resolve -- yes --> probe0
+  useip --> probe0
+  probe0{GET /health<br/>answers in 1.5 s?} -- yes --> awake([already awake])
+  probe0 -- no --> round[round N:<br/>send magic packets to every MAC]
+  round --> poll{GET /health every 1 s<br/>for up to 10 s}
+  poll -- answered --> woke([woke after N s])
+  poll -- no answer --> deadline{past<br/>wakeTimeoutSeconds?}
+  deadline -- no --> round
+  deadline -- yes --> fail([error, exit 2])

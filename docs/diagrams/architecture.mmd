@@ -1,0 +1,19 @@
+flowchart LR
+  CLI["wol CLI<br/>other computer"]
+  SP["Bonjour Sleep Proxy<br/>Apple TV or HomePod"]
+  subgraph Mac["Mac to wake"]
+    NIC["Wi-Fi / Ethernet"]
+    MDNS["mDNSResponder"]
+    AGENT["wol-agent<br/>port 7777"]
+    CAF["caffeinate"]
+    JOB["job<br/>e.g. cargo build"]
+  end
+  AGENT -->|"registers _wol-agent._tcp"| MDNS
+  MDNS -->|"at sleep: hands over port, IP, MAC"| SP
+  CLI -->|"A: magic packets, UDP 9 and 7"| NIC
+  CLI -->|"B: TCP connect to 7777"| SP
+  SP -->|"wake packet"| NIC
+  CLI -->|"HTTP: health, start job, read log"| AGENT
+  AGENT -->|"keep awake"| CAF
+  AGENT -->|"spawn"| JOB
+  CAF -.->|"held until job exits"| JOB

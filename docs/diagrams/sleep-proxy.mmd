@@ -1,0 +1,14 @@
+sequenceDiagram
+  participant A as wol-agent
+  participant R as mDNSResponder (Mac)
+  participant P as Sleep Proxy (Apple TV / HomePod)
+  participant C as wol CLI
+  A->>R: dns-sd -R _wol-agent._tcp port 7777
+  Note over R: Mac goes to sleep
+  R->>P: register services, IP and MAC with the proxy
+  Note over P: proxy answers ARP for the Mac's IP
+  C->>P: TCP SYN to <mac-ip>:7777
+  P->>R: wake packet
+  Note over R: Mac wakes (usually into dark wake)
+  R->>P: take services back
+  C->>A: retried connection reaches the agent

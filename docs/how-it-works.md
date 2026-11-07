@@ -13,6 +13,10 @@ Sleep Proxy** on the LAN (Apple TVs and HomePods do this). While the Mac sleeps,
 IP and watches for connections to the registered ports. When a TCP SYN arrives for port 7777, the proxy sends the Mac a
 wake packet and steps aside.
 
+![Sleep proxy handoff](images/sleep-proxy.png)
+
+<details><summary>Mermaid source (<a href="diagrams/sleep-proxy.mmd">diagrams/sleep-proxy.mmd</a>)</summary>
+
 ```mermaid
 sequenceDiagram
   participant A as wol-agent
@@ -29,6 +33,7 @@ sequenceDiagram
   R->>P: take services back
   C->>A: retried connection reaches the agent
 ```
+</details>
 
 This is why the agent advertises itself at all: without the Bonjour registration the proxy would not know the port
 matters and would ignore the SYN.
@@ -41,6 +46,10 @@ setup. On Ethernet, or Macs that support Wake on Wireless, these alone can wake 
 
 ## 3. The wake loop in the CLI
 `src/services/wakeService.js` drives both paths together and stops as soon as the agent answers.
+
+![CLI wake loop](images/wake-loop.png)
+
+<details><summary>Mermaid source (<a href="diagrams/wake-loop.mmd">diagrams/wake-loop.mmd</a>)</summary>
 
 ```mermaid
 flowchart TD
@@ -56,6 +65,7 @@ flowchart TD
   deadline -- no --> round
   deadline -- yes --> fail([error, exit 2])
 ```
+</details>
 
 Each `/health` probe is itself a TCP connection attempt to port 7777, which is what the sleep proxy reacts to, so the
 probing is not just waiting: it is the wake trigger.
@@ -74,6 +84,10 @@ A network wake usually lands the Mac in **dark wake**. In dark wake macOS ignore
 
 `-s` (PreventSystemSleep) is only honoured on AC power, which is one reason the Mac must be plugged in.
 
+![Dark wake to full wake with caffeinate](images/keep-awake-states.png)
+
+<details><summary>Mermaid source (<a href="diagrams/keep-awake-states.mmd">diagrams/keep-awake-states.mmd</a>)</summary>
+
 ```mermaid
 stateDiagram-v2
   [*] --> Asleep
@@ -87,10 +101,15 @@ stateDiagram-v2
   Leased --> Idle: lease expires and no jobs running
   Idle --> Asleep: normal macOS idle sleep
 ```
+</details>
 
 ## 5. Running a job
 `src/services/agentServer.js` checks the bearer token (constant-time compare) on every route except `/health`, then
 `src/services/jobService.js` decides what to run:
+
+![Job request checks](images/job-request.png)
+
+<details><summary>Mermaid source (<a href="diagrams/job-request.mmd">diagrams/job-request.mmd</a>)</summary>
 
 ```mermaid
 flowchart TD
@@ -109,12 +128,17 @@ flowchart TD
   spawn --> hold[caffeinate -i -s -m -w pid]
   hold --> r202[202 run record]
 ```
+</details>
 
 Jobs run in the user's login shell so the user's toolchain (cargo, nvm, brew, git credentials) is on PATH. That is
 also why the agent is a LaunchAgent (runs as you, while you are logged in) rather than a root LaunchDaemon. Each job
 gets its own process group, so cancel can SIGTERM the whole tree.
 
 A run moves through these states:
+
+![Job run states](images/job-lifecycle.png)
+
+<details><summary>Mermaid source (<a href="diagrams/job-lifecycle.mmd">diagrams/job-lifecycle.mmd</a>)</summary>
 
 ```mermaid
 stateDiagram-v2
@@ -126,6 +150,7 @@ stateDiagram-v2
   failed --> [*]
   cancelled --> [*]
 ```
+</details>
 
 Runs are kept in memory (the last 200), each finished run is appended to `~/.wol-agent/jobs.jsonl`, and logs stay in
 `~/.wol-agent/logs/<id>.log` (`src/repositories/jobRepository.js`).

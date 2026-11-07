@@ -1,0 +1,12 @@
+stateDiagram-v2
+  direction LR
+  Asleep: Asleep (system sleep)<br/>CPU, display, disk off<br/>Wi-Fi in low-power listen
+  DarkWake: Dark wake<br/>CPU on, display off<br/>sleeps again in under a minute
+  Awake: Full wake<br/>held by caffeinate
+  [*] --> Asleep
+  Asleep --> DarkWake: proxy or magic packet
+  Asleep --> DarkWake: macOS maintenance wake
+  DarkWake --> Asleep: nothing holds it
+  DarkWake --> Awake: wol-agent request, caffeinate -u
+  Awake --> Awake: job running or lease active
+  Awake --> Asleep: job done, lease expired, idle sleep

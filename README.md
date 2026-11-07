@@ -38,33 +38,102 @@ This project combines the wake paths macOS *does* support with a small agent tha
 4. **Hold awake while the job runs.** Each job gets its own `caffeinate -i -s -m -w <pid>`, so the Mac cannot sleep
    until the job's process exits.
 
+## Is the Mac really asleep? What does it cost in power?
+**Yes, between jobs the Mac is in real system sleep**, the same sleep as closing the lid or choosing  ▸ Sleep. This
+project does not keep it awake, and it does not need `pmset sleep 0`. The CPU, display and disks are off. Only the
+Wi-Fi/Ethernet chip stays in a low-power listening mode, and the sleep proxy on the Apple TV or HomePod answers for the
+Mac on the network. It is awake only while it is woken, running a job, or inside the keep-awake lease that follows the
+last request (5 minutes by default, `keepAwakeSeconds`).
+
+![Power states: asleep, dark wake, full wake held by caffeinate](docs/images/power-states.png)
+
+<details><summary>Mermaid source (<a href="docs/diagrams/power-states.mmd">docs/diagrams/power-states.mmd</a>)</summary>
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  Asleep: Asleep (system sleep)<br/>CPU, display, disk off<br/>Wi-Fi in low-power listen
+  DarkWake: Dark wake<br/>CPU on, display off<br/>sleeps again in under a minute
+  Awake: Full wake<br/>held by caffeinate
+  [*] --> Asleep
+  Asleep --> DarkWake: proxy or magic packet
+  Asleep --> DarkWake: macOS maintenance wake
+  DarkWake --> Asleep: nothing holds it
+  DarkWake --> Awake: wol-agent request, caffeinate -u
+  Awake --> Awake: job running or lease active
+  Awake --> Asleep: job done, lease expired, idle sleep
+```
+</details>
+
+| State | What is on | Roughly how long | Power |
+|---|---|---|---|
+| Asleep | Memory kept powered; network chip listening | Most of the time | Lowest, typically around a watt or less on Apple Silicon (your model's Apple *Product Environmental Report* lists it) |
+| Dark wake | CPU, network; display off | Seconds to about a minute | Low, brief |
+| Full wake, idle (lease) | Everything; display sleeps per your settings | Up to `keepAwakeSeconds` after the last request | Idle-awake power, a few watts |
+| Full wake, job running | Everything, CPU busy | Length of the job | Whatever the job uses (a release build runs the CPU hard) |
+
+What this looks like in the macOS power log on the MacBook Pro (M4) this was built on, plugged in. Trimmed from
+`pmset -g log`; the numbers at the end are how long each state lasted:
+```
+19:54:27 Sleep     Entering Sleep state due to 'Software Sleep' ... Using AC                    2 secs
+19:54:29 DarkWake  DarkWake from Deep Idle : due to ... wifibt SMC.OutboxNotEmpty Using AC     46 secs
+19:55:15 Sleep     Entering Sleep state due to 'Maintenance Sleep' ... Using AC               114 secs
+19:57:09 DarkWake  DarkWake from Deep Idle : due to ... wifibt ... Using AC                      1 secs
+19:57:10 Wake      DarkWake to FullWake from Deep Idle : due to HID Activity Using AC
+```
+`wifibt` means the wake came from the Wi-Fi/Bluetooth chip, which is where a sleep-proxy or magic-packet wake comes from
+(other network traffic, such as push notifications, can cause these too).
+After 46 seconds of dark wake with nothing holding it, the Mac went straight back to sleep. That is the behaviour
+`wol-agent` overrides with `caffeinate` only when there is real work to do.
+
+Things worth knowing:
+- **macOS wakes itself too.** Even with this project uninstalled, macOS does short maintenance dark wakes (Power Nap,
+  DHCP lease renewal, Spotlight, iCloud), every 15 minutes or so on AC. These are not caused by `wol-agent`.
+- **The agent costs nothing while the Mac sleeps.** It is a Node process that is suspended with everything else. While
+  awake and idle it waits on a socket and uses no measurable CPU.
+- **The settings this needs keep the network listening during sleep:** `womp 1` (wake for network access) and
+  `tcpkeepalive 1`. They add a little to sleep power compared with a fully deaf Mac, which is the trade for being
+  wakeable. It must be on AC power anyway; macOS does not network-wake a laptop on battery.
+- **`pmset sleep 0` is the expensive fallback.** The Troubleshooting section mentions it for networks where wake does
+  not work. It stops the Mac from ever sleeping (only the display sleeps), so it draws idle-awake power around the clock.
+- **Check it yourself.** `pmset -g log | grep -E "Entering Sleep|DarkWake|FullWake" | tail` shows when it slept and
+  woke and why. `pmset -g assertions` shows what is holding it awake right now (look for `caffeinate`, and note that
+  apps such as audio software can hold it awake too). For actual watts, use a smart plug or USB-C power meter, since
+  macOS cannot measure itself while asleep.
+
 ## Architecture
+![Architecture: the wol CLI wakes the Mac through the sleep proxy or magic packets, then talks HTTP to wol-agent](docs/images/architecture.png)
+
+<details><summary>Mermaid source (<a href="docs/diagrams/architecture.mmd">docs/diagrams/architecture.mmd</a>)</summary>
+
 ```mermaid
 flowchart LR
-  subgraph Remote["Other computer"]
-    CLI["wol CLI<br/>bin/wol.js"]
-  end
-  subgraph LAN
-    SP["Bonjour Sleep Proxy<br/>Apple TV / HomePod"]
-  end
+  CLI["wol CLI<br/>other computer"]
+  SP["Bonjour Sleep Proxy<br/>Apple TV or HomePod"]
   subgraph Mac["Mac to wake"]
+    NIC["Wi-Fi / Ethernet"]
     MDNS["mDNSResponder"]
-    AGENT["wol-agent<br/>LaunchAgent, port 7777"]
+    AGENT["wol-agent<br/>port 7777"]
     CAF["caffeinate"]
-    JOB["job<br/>zsh -lc 'cargo build --release'"]
+    JOB["job<br/>e.g. cargo build"]
   end
-  AGENT -->|"dns-sd -R _wol-agent._tcp"| MDNS
-  MDNS -->|"on sleep: hand over services + MAC"| SP
-  CLI -->|"1. UDP magic packets :9 / :7"| Mac
-  CLI -->|"2. TCP SYN :7777"| SP
-  SP -->|"3. wake packet"| Mac
-  CLI -->|"4. GET /health, POST /jobs, GET log"| AGENT
-  AGENT --> CAF
-  AGENT -->|spawn| JOB
-  CAF -.->|"holds assertions until job exits"| JOB
+  AGENT -->|"registers _wol-agent._tcp"| MDNS
+  MDNS -->|"at sleep: hands over port, IP, MAC"| SP
+  CLI -->|"A: magic packets, UDP 9 and 7"| NIC
+  CLI -->|"B: TCP connect to 7777"| SP
+  SP -->|"wake packet"| NIC
+  CLI -->|"HTTP: health, start job, read log"| AGENT
+  AGENT -->|"keep awake"| CAF
+  AGENT -->|"spawn"| JOB
+  CAF -.->|"held until job exits"| JOB
 ```
+</details>
 
 ## What happens during `wol run <job>`
+![Sequence of wol run: probe, wake loop, start job, follow log](docs/images/wol-run-sequence.png)
+
+<details><summary>Mermaid source (<a href="docs/diagrams/wol-run-sequence.mmd">docs/diagrams/wol-run-sequence.mmd</a>)</summary>
+
 ```mermaid
 sequenceDiagram
   participant C as wol CLI
@@ -90,6 +159,7 @@ sequenceDiagram
   C-->>C: exit with the job's exit code
   Note over M: job exits, assertions release, normal idle sleep resumes
 ```
+</details>
 
 ## Set up the Mac to be woken
 ```sh
@@ -210,9 +280,11 @@ src/models/     JSDoc types
 src/utils/      config, magic packets, caffeinate keep-awake
 src/repositories/ job records and logs
 src/services/   HTTP server, job runner, Bonjour advertising, API client, wake loop
-scripts/        setup-mac.sh, uninstall-mac.sh
+scripts/        setup-mac.sh, uninstall-mac.sh, render-diagrams.sh
 launchd/        LaunchAgent plist template
 docs/           how-it-works.md
+docs/diagrams/  mermaid sources for every diagram
+docs/images/    the diagrams rendered to PNG (./scripts/render-diagrams.sh)
 test/           integration tests
 ```
 

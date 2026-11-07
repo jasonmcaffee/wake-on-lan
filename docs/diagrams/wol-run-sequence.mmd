@@ -1,0 +1,23 @@
+sequenceDiagram
+  participant C as wol CLI
+  participant P as Sleep Proxy
+  participant M as Mac (asleep)
+  participant A as wol-agent
+  C->>A: GET /health (1.5 s timeout)
+  Note over C,M: no answer, the Mac is asleep
+  loop every 10 s until healthy or timeout (default 90 s)
+    C->>M: magic packets (every MAC x broadcast address x ports 9, 7)
+    C->>P: TCP SYN to :7777 (proxy owns the port while the Mac sleeps)
+    P->>M: wake packet
+    C->>A: GET /health every 1 s
+  end
+  A-->>A: caffeinate -u (dark wake to full wake) + caffeinate -i -s lease (5 min)
+  A-->>C: 200 ok
+  C->>A: POST /jobs {"job": "build-unluminous"}
+  A-->>A: spawn job in login shell + caffeinate -i -s -m -w pid
+  loop every 1 s until the job finishes
+    C->>A: GET /jobs/:id/log?offset=n
+    A-->>C: new log text, X-Next-Offset, X-Job-Status
+  end
+  C-->>C: exit with the job's exit code
+  Note over M: job exits, assertions release, normal idle sleep resumes
