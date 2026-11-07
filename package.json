@@ -1,0 +1,18 @@
+{
+  "name": "wake-on-lan",
+  "version": "1.0.0",
+  "description": "Wake a sleeping Mac over the LAN and hand it work (builds, scripts) from another machine.",
+  "type": "module",
+  "bin": {
+    "wol": "bin/wol.js",
+    "wol-agent": "bin/wol-agent.js"
+  },
+  "scripts": {
+    "agent": "node bin/wol-agent.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
